@@ -27,6 +27,8 @@ logging.basicConfig(
 # Get it into pdf format? 
 # Add decorators for user required
 # Add exception class
+# Check which headers are trully required or not
+# Check which params are also required in requests
 
 
 class MigrosApi(object): 
