@@ -1,2 +1,3 @@
-# migros_api
+# Migros Unofficial API
+
 Unofficial Migros API
