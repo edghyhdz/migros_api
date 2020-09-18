@@ -29,6 +29,7 @@ logging.basicConfig(
 # Add exception class
 # Check which headers are trully required or not
 # Check which params are also required in requests
+# Use regex to search for username
 
 
 class MigrosApi(object): 
@@ -115,6 +116,21 @@ class MigrosApi(object):
         matches = re.findall(r'{}'.format("Edgar"), response.text)
         if matches:
             logging.info("Logged in succesfully to cumulus")
+
+
+class ExceptionMigrosApi(Exception):
+    """
+    Handles all exceptions related to MigrosAPI Class
+    """
+    error_codes = {
+        '1': "Could not authenticate",
+        '2': ""
+    }
+
+    def __init__(self, code):
+        self.code = code
+        self.msg = str(code)
+
 
 
 
