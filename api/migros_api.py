@@ -6,6 +6,7 @@ import re
 import logging
 import os
 import sys
+from bs4 import BeautifulSoup as bs
 
 
 FILE_PATH_CONF = "./"
@@ -23,8 +24,6 @@ logging.basicConfig(
 
 
 # TODO: 
-# FIND OTHER VALUE THAT TELLS YOU WHETHER YOU LOGGED IN SUCCESFULLY OR NOT
-
 # Add methods to search for all kasenbons
 # Fetch specific kasenbon with id
 # Get it into pdf format? 
@@ -49,6 +48,7 @@ class MigrosApi(object):
         self.csfr_pattern = r'(?<="_csrf" content=)(.*)(?=\/>)'
         self.cumulus_login = "https://www.migros.ch/de/cumulus/konto~checkImmediate=true~.html"
 
+        # Log into cumulus
         self.log_cumulus()
 
     def authenticate(self):
@@ -82,11 +82,20 @@ class MigrosApi(object):
 
             logging.info("Response: %s", status_code)
 
-            matches = re.findall(r'{}'.format(self.username), response.text)
-            if matches:
-                logging.info("Logged in succesfully: %s", matches)
-            else:
+            soup = bs(response.content, 'lxml')
+
+            script = soup.find(
+                'script', attrs={
+                    "data-t-name": "DataLayerInit"
+                }
+            )
+
+            if not script:
                 raise ExceptionMigrosApi(1)
+            else: 
+                soup_item = soup.find('li', attrs={'class': 'o-header__name'})
+                user_name = soup_item.text
+                logging.info("Logged in succesfully: %s", user_name)                
 
         except ExceptionMigrosApi as err:
             error_line = sys.exc_info()[-1].tb_lineno
