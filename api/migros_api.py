@@ -8,6 +8,7 @@ import os
 import sys
 from bs4 import BeautifulSoup as bs
 from datetime import datetime
+import numpy as np
 
 
 FILE_PATH_CONF = "./"
@@ -49,6 +50,7 @@ class MigrosApi(object):
         self.csfr_pattern = r'(?<="_csrf" content=)(.*)(?=\/>)'
         self.cumulus_login = "https://www.migros.ch/de/cumulus/konto~checkImmediate=true~.html"
         self.url_kassenbons = "https://www.migros.ch/de/cumulus/konto/kassenbons/variants/variant-1/content/04/ajaxContent/0.html?period="
+        self.user_real_name = ""
 
         # Log into cumulus
         self.login_cumulus()
@@ -97,8 +99,8 @@ class MigrosApi(object):
             else: 
                 soup_item = soup.find('li', attrs={'class': 'o-header__name'})
                 if soup_item:
-                    user_name = soup_item.text
-                    logging.info("Logged in succesfully: %s", user_name)           
+                    self.user_real_name = soup_item.text
+                    logging.info("Logged in succesfully: %s", self.user_real_name)           
                 else:
                     raise ExceptionMigrosApi(2)     
 
@@ -142,7 +144,7 @@ class MigrosApi(object):
             status_code = response.status_code
             logging.info("Status code: %s", status_code)
 
-            matches = re.findall(r'{}'.format("test"), response.text)
+            matches = re.findall(r'{}'.format(self.user_real_name), response.text)
             if matches:
                 logging.info("Logged in successfully to cumulus")
             else:
@@ -180,14 +182,6 @@ class MigrosApi(object):
                 ]
             )
 
-            # # First call kassenbons main site to get new cookies
-            # url_test = 'https://www.migros.ch/de/cumulus/konto/kassenbons.html'
-            # response = self.session.get(url_test, headers=self.headers)
-            # response_code = response.status_code
-            # logging.info("Response code for main kassenbons site: %s", response_code)
-
-            # return response.text
-
             # Build url to search on that given period
             request_url = self.url_kassenbons + "%s_%s" % (period_from, period_to)
             request_url = request_url.strip()
@@ -214,14 +208,58 @@ class MigrosApi(object):
             # authenticated
             status_code = response.status_code
             logging.info("Status code kassenbons: %s", status_code)
-            logging.info(response.text)
 
-            return response.text
+            result_dictionary = self.parse_kassenbon_data(response=response)
+
+            return result_dictionary
 
         except ExceptionMigrosApi as err:
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("%s, error line: %s", *(err.error_codes[err.msg], error_line))
 
+        except Exception as err:
+            error_line = sys.exc_info()[-1].tb_lineno
+            logging.error("Error: %s, line: %s", *(err, error_line))
+    
+    def parse_kassenbon_data(self, response: requests.Response):
+        """
+        Parses bit data to a dictionary. Used as a helper function to 
+        the get_all_kasenbons() method
+        """
+        try: 
+            # Get total number of pages
+            soup = bs(response.content, 'lxml')
+
+            pages = []
+            for item in soup.find_all('a', attrs={"aria-label": "Seite"}):
+                page_value = item.get('data-value')
+                if page_value.isnumeric():
+                    page_value = int(page_value)
+                    pages.append(page_value)
+            total_pages = np.max(pages)
+            logging.info("Total of pages for this query: %s", total_pages)
+
+            result_dict = {}
+
+            for item in soup.find_all('input', attrs={'type': 'checkbox'}): 
+                download_id = item.get('value')
+                pdf_ref = item.find_next('a', attrs={'class': 'ui-js-toggle-modal'})
+                store_name = pdf_ref.find_next('td')
+                cost = store_name.find_next('td')
+                points = cost.find_next('td')
+
+                result_dict[download_id] = {
+                    'pdf_ref': pdf_ref.get('href'),
+                    'store_name': store_name.text,
+                    'cost': cost.text,
+                    'points': points.text
+                }
+            
+            return result_dict
+
+        except ExceptionMigrosApi as err:
+            error_line = sys.exc_info()[-1].tb_lineno
+            logging.error("%s, error line: %s", *(err.error_codes[err.msg], error_line))
         except Exception as err:
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error: %s, line: %s", *(err, error_line))
