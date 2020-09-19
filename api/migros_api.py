@@ -25,7 +25,7 @@ logging.basicConfig(
 
 
 # TODO: 
-# Add methods to search for all kasenbons
+# Provide get_kassenbons result in a list or dictionary format
 # Fetch specific kasenbon with id
 # Get it into pdf format? 
 # Add decorators for user required
@@ -234,7 +234,6 @@ class MigrosApi(object):
         """
         pass
     
-
 
 class ExceptionMigrosApi(Exception):
     """
