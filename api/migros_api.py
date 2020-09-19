@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 from bs4 import BeautifulSoup as bs
+from datetime import datetime
 
 
 FILE_PATH_CONF = "./"
@@ -47,9 +48,10 @@ class MigrosApi(object):
         self.username = username
         self.csfr_pattern = r'(?<="_csrf" content=)(.*)(?=\/>)'
         self.cumulus_login = "https://www.migros.ch/de/cumulus/konto~checkImmediate=true~.html"
+        self.url_kassenbons = "https://www.migros.ch/de/cumulus/konto/kassenbons/variants/variant-1/content/04/ajaxContent/0.html?period="
 
         # Log into cumulus
-        self.log_cumulus()
+        self.login_cumulus()
 
     def authenticate(self):
         """authenticate with init credentials
@@ -94,8 +96,11 @@ class MigrosApi(object):
                 raise ExceptionMigrosApi(1)
             else: 
                 soup_item = soup.find('li', attrs={'class': 'o-header__name'})
-                user_name = soup_item.text
-                logging.info("Logged in succesfully: %s", user_name)                
+                if soup_item:
+                    user_name = soup_item.text
+                    logging.info("Logged in succesfully: %s", user_name)           
+                else:
+                    raise ExceptionMigrosApi(2)     
 
         except ExceptionMigrosApi as err:
             error_line = sys.exc_info()[-1].tb_lineno
@@ -105,8 +110,7 @@ class MigrosApi(object):
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error when authenticating: %s, line: %s", *(err, error_line))
 
-
-    def log_cumulus(self):
+    def login_cumulus(self):
         """log into cumulus
         """
 
@@ -138,12 +142,11 @@ class MigrosApi(object):
             status_code = response.status_code
             logging.info("Status code: %s", status_code)
 
-            # TODO: finish all exceptions and so, in case log in is not succesfull
             matches = re.findall(r'{}'.format("test"), response.text)
             if matches:
-                logging.info("Logged in succesfully to cumulus")
+                logging.info("Logged in successfully to cumulus")
             else:
-                raise ExceptionMigrosApi(2)
+                raise ExceptionMigrosApi(3)
         
         except ExceptionMigrosApi as err:
             error_line = sys.exc_info()[-1].tb_lineno
@@ -153,6 +156,85 @@ class MigrosApi(object):
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error when authenticating: %s, line: %s", *(err, error_line))
 
+    def get_all_kasenbons(self, period_from: datetime, period_to: datetime):
+        """
+        Retrieves all kasenbons ids, with their respective date/place of the event
+        
+        Args:
+            period_from (datetime): from which date do search
+            period_to (datetime): to which date extend the search
+        """
+
+        try: 
+            for date in (period_from, period_to): 
+                if not isinstance(period_from, datetime): 
+                    raise ExceptionMigrosApi(4)
+            
+            period_from = datetime.strftime(period_from, "%Y-%m-%-d")
+            period_to = datetime.strftime(period_to, "%Y-%m-%-d")
+
+            # Build up cookies -> otherwise it will not work
+            self.headers['cookie'] = '; '.join(
+                [
+                    x[0] + '=' + x[1] for x in self.session.cookies.get_dict().items()
+                ]
+            )
+
+            # # First call kassenbons main site to get new cookies
+            # url_test = 'https://www.migros.ch/de/cumulus/konto/kassenbons.html'
+            # response = self.session.get(url_test, headers=self.headers)
+            # response_code = response.status_code
+            # logging.info("Response code for main kassenbons site: %s", response_code)
+
+            # return response.text
+
+            # Build url to search on that given period
+            request_url = self.url_kassenbons + "%s_%s" % (period_from, period_to)
+            request_url = request_url.strip()
+            logging.info("request url: %s", request_url)
+            
+            self.headers.update(
+                {
+                    "accept": "text/html, */*; q=0.01",
+                    "accept-language": "de",
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                    "x-requested-with": "XMLHttpRequest",
+                }
+            )
+            params = {
+                "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
+                "referrerPolicy": "no-referrer-when-downgrade",
+
+            }
+
+            response = self.session.get(request_url, headers=self.headers, params=params)
+            # It seems that always the status code is 200, even if user is not
+            # authenticated
+            status_code = response.status_code
+            logging.info("Status code kassenbons: %s", status_code)
+            logging.info(response.text)
+
+            return response.text
+
+        except ExceptionMigrosApi as err:
+            error_line = sys.exc_info()[-1].tb_lineno
+            logging.error("%s, error line: %s", *(err.error_codes[err.msg], error_line))
+
+        except Exception as err:
+            error_line = sys.exc_info()[-1].tb_lineno
+            logging.error("Error: %s, line: %s", *(err, error_line))
+
+    def get_kassenbon(self, k_id: str):
+        """
+        Gets specific kassenbon
+        Args:
+            k_id (str): kassenbon to retrieve given a kassenbon id
+        """
+        pass
+    
+
 
 class ExceptionMigrosApi(Exception):
     """
@@ -160,7 +242,9 @@ class ExceptionMigrosApi(Exception):
     """
     error_codes = {
         '1': "Could not authenticate",
-        '2': "Could not authenticate to cumulus"
+        '2': "Could not find username when authenticating", 
+        '3': "Could not authenticate to cumulus",
+        '4': "period_from and period_to should be datetime objects"
     }
 
     def __init__(self, code):
