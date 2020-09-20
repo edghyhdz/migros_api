@@ -51,10 +51,10 @@ class MigrosApi(object):
         self.csfr_pattern = r'(?<="_csrf" content=)(.*)(?=\/>)'
         self.cumulus_login = "https://www.migros.ch/de/cumulus/konto~checkImmediate=true~.html"
         self.url_kassenbons = "https://www.migros.ch/de/cumulus/konto/kassenbons/variants/variant-1/content/04/ajaxContent/0.html?period="
+        self.url_export_data = "https://www.migros.ch/service/avantaReceiptExport/"
         self.user_real_name = ""
-        self.page_number = 0
         self.total_pages = 0
-        self.page_counter = 0
+        self.page_counter = 1
         self.resulting_cumulus_dict = {}
         self.period_from: datetime = datetime.now()
         self.period_to: datetime = datetime.now()
@@ -224,7 +224,6 @@ class MigrosApi(object):
             params = {
                 "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
                 "referrerPolicy": "no-referrer-when-downgrade",
-
             }
 
             response = self.session.get(request_url, headers=self.headers, params=params)
@@ -278,18 +277,18 @@ class MigrosApi(object):
                 if 'all' not in item.get('value'):
                     download_id = item.get('value')
                     pdf_ref = item.find_next('a', attrs={'class': 'ui-js-toggle-modal'})
+                    recepit_id = pdf_ref.get('href').split("receiptId=")[-1]
                     store_name = pdf_ref.find_next('td')
                     cost = store_name.find_next('td')
                     points = cost.find_next('td')
 
-                    # price, currency = cost.split(" ")
-                    # cumulus_points = points.split(" ")[0]
-
+                    # TODO: Better formatting of results
                     self.resulting_cumulus_dict[download_id] = {
                         'pdf_ref': pdf_ref.get('href'),
+                        'receipt_id': recepit_id,
                         'store_name': store_name.text,
-                        'cost': cost,
-                        'cumulus_points': points
+                        'cost': cost.text,
+                        'cumulus_points': points.text
                     }
 
             return self.resulting_cumulus_dict, response.content
@@ -316,14 +315,50 @@ class MigrosApi(object):
             # 
             logging.info("No more pages to query")
 
-    def get_kassenbon(self, k_id: str):
+    def get_kassenbon(self, receipt_id: str, export_type: str):
         """
-        Gets specific kassenbon
+        Fetches specified receipt from id
+
         Args:
-            k_id (str): kassenbon to retrieve given a kassenbon id
+            receipt_id (str): id from receipt
+            export_type (str): type to export
+
+        Returns:
+            [bytes]: returns requested file
         """
-        pass
-    
+
+        # Build up cookies -> otherwise it will not work
+        self.headers['cookie'] = '; '.join(
+            [
+                x[0] + '=' + x[1] for x in self.session.cookies.get_dict().items()
+            ]
+        )
+        self.headers.update(
+            {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "sec-fetch-dest": "iframe",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
+            "referrerPolicy": "no-referrer-when-downgrade",
+            }
+        )
+
+        # Check if parameters are indeed needed
+        params = {
+            "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
+            "referrerPolicy": "no-referrer-when-downgrade"
+        }
+
+        # Build url to search on that given period
+        request_url = self.url_export_data + "%s?receiptId=%s" % (export_type, receipt_id)
+        logging.info("Export url: %s", request_url)
+
+        response = self.session.get(request_url, headers=self.headers, params=params)
+
+        return response.content
 
 class ExceptionMigrosApi(Exception):
     """
