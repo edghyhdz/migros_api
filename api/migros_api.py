@@ -306,10 +306,15 @@ class MigrosApi(object):
         """
         If user does not select get all
         """
-        self.page_counter += 1
-        result_dict = self.get_all_kasenbons(self.period_from, self.period_to, get_next_page=True)
-
-        return result_dict
+        if self.page_counter <= self.total_pages:
+            result_dict = self.get_all_kasenbons(self.period_from, self.period_to, get_next_page=True)
+            return result_dict
+        else:
+            #TODO: review this result
+            # in case of error then also go back one page in case of line 267 max np
+            # error handling for that case
+            # 
+            logging.info("No more pages to query")
 
     def get_kassenbon(self, k_id: str):
         """
