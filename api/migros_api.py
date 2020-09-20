@@ -26,6 +26,7 @@ logging.basicConfig(
 
 
 # TODO: 
+# CORRECT ERROR ON GET_NEXT_KASSENBONS PAGES RISE BY 2
 # Provide get_kassenbons result in a list or dictionary format
 # Fetch specific kasenbon with id
 # Get it into pdf format? 
@@ -51,6 +52,12 @@ class MigrosApi(object):
         self.cumulus_login = "https://www.migros.ch/de/cumulus/konto~checkImmediate=true~.html"
         self.url_kassenbons = "https://www.migros.ch/de/cumulus/konto/kassenbons/variants/variant-1/content/04/ajaxContent/0.html?period="
         self.user_real_name = ""
+        self.page_number = 0
+        self.total_pages = 0
+        self.page_counter = 0
+        self.resulting_cumulus_dict = {}
+        self.period_from: datetime = datetime.now()
+        self.period_to: datetime = datetime.now()
 
         # Log into cumulus
         self.login_cumulus()
@@ -158,15 +165,27 @@ class MigrosApi(object):
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error when authenticating: %s, line: %s", *(err, error_line))
 
-    def get_all_kasenbons(self, period_from: datetime, period_to: datetime):
+    def get_all_kasenbons(self, period_from: datetime, period_to: datetime, all_pages=False, **kwargs):
         """
         Retrieves all kasenbons ids, with their respective date/place of the event
         
         Args:
             period_from (datetime): from which date do search
             period_to (datetime): to which date extend the search
+            all_pages (boolean): default <False>, whether to fetch all data from 
+            all resulting pages or not
         """
 
+        # To be used to query next page with results
+        self.period_from = period_from
+        self.period_to = period_to
+
+        # To identify when it was sent by 
+        get_next_page = False
+        for key in kwargs:
+            if 'get_next_page' in key:
+                get_next_page = kwargs['get_next_page']
+                
         try: 
             for date in (period_from, period_to): 
                 if not isinstance(period_from, datetime): 
@@ -184,6 +203,11 @@ class MigrosApi(object):
 
             # Build url to search on that given period
             request_url = self.url_kassenbons + "%s_%s" % (period_from, period_to)
+            if get_next_page:
+                logging.info("Should be getting next page")
+                request_url = request_url + "&p%s" % self.page_counter
+                logging.info("URL NEW: %s", request_url)
+
             request_url = request_url.strip()
             logging.info("request url: %s", request_url)
             
@@ -221,10 +245,13 @@ class MigrosApi(object):
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error: %s, line: %s", *(err, error_line))
     
-    def parse_kassenbon_data(self, response: requests.Response):
+    def parse_kassenbon_data(self, response: bytes):
         """
         Parses bit data to a dictionary. Used as a helper function to 
         the get_all_kasenbons() method
+
+        Args:
+            response (bytes): requests.content
         """
         try: 
             # Get total number of pages
@@ -236,33 +263,53 @@ class MigrosApi(object):
                 if page_value.isnumeric():
                     page_value = int(page_value)
                     pages.append(page_value)
-            total_pages = np.max(pages)
-            logging.info("Total of pages for this query: %s", total_pages)
+            # Gets total number of pages from query
+            self.total_pages = np.max(pages)
 
-            result_dict = {}
+            # Counts which page are we in
+            self.page_counter += 1
+
+            logging.info("Total of pages for this query: %s", self.total_pages)
+
+            self.resulting_cumulus_dict = {}
 
             for item in soup.find_all('input', attrs={'type': 'checkbox'}): 
-                download_id = item.get('value')
-                pdf_ref = item.find_next('a', attrs={'class': 'ui-js-toggle-modal'})
-                store_name = pdf_ref.find_next('td')
-                cost = store_name.find_next('td')
-                points = cost.find_next('td')
+                # Don't take first checkbox item to select all tick boxes
+                if 'all' not in item.get('value'):
+                    download_id = item.get('value')
+                    pdf_ref = item.find_next('a', attrs={'class': 'ui-js-toggle-modal'})
+                    store_name = pdf_ref.find_next('td')
+                    cost = store_name.find_next('td')
+                    points = cost.find_next('td')
 
-                result_dict[download_id] = {
-                    'pdf_ref': pdf_ref.get('href'),
-                    'store_name': store_name.text,
-                    'cost': cost.text,
-                    'points': points.text
-                }
-            
-            return result_dict
+                    # price, currency = cost.split(" ")
+                    # cumulus_points = points.split(" ")[0]
 
+                    self.resulting_cumulus_dict[download_id] = {
+                        'pdf_ref': pdf_ref.get('href'),
+                        'store_name': store_name.text,
+                        'cost': cost,
+                        'cumulus_points': points
+                    }
+
+            return self.resulting_cumulus_dict, response.content
+
+        # TODO: Error handling for this method
         except ExceptionMigrosApi as err:
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("%s, error line: %s", *(err.error_codes[err.msg], error_line))
         except Exception as err:
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error: %s, line: %s", *(err, error_line))
+    
+    def get_next_kassenbons_page(self): 
+        """
+        If user does not select get all
+        """
+        self.page_counter += 1
+        result_dict = self.get_all_kasenbons(self.period_from, self.period_to, get_next_page=True)
+
+        return result_dict
 
     def get_kassenbon(self, k_id: str):
         """
