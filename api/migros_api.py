@@ -361,11 +361,11 @@ class MigrosApi(object):
 
 # TODO: Handle errors for this class
 # Especially _build_data_frame() method -> Test with several examples
-class ReceiptItem:
+
+class ReceiptItem(object):
     """
     Receipt items to be parsed as data frame or as bytes
     """
-
     def __init__(self, soup: bytes):
         super(ReceiptItem).__init__()
         self._soup = bs(soup, 'lxml')
@@ -454,11 +454,10 @@ class ReceiptItem:
                 else:     
                     temp = [x.strip() for x in txt.split("  ") if x!= ""]
                     new_text.append(temp)
-
-        # Meaning that there column <Gespart> is empty
-        if len(temp) == 5:
-            idx_pop = col_names.index('Gespart')
-            col_names.pop(idx_pop)
+        
+        for row in new_text:
+            if len(row) == 5:
+                row.insert(3, '')
             
         df_receipt = pd.DataFrame(new_text, columns=col_names)
         df_receipt['Gespart'] = ['' for x in df_receipt.Menge]
