@@ -360,9 +360,10 @@ class MigrosApi(object):
 
 
 # TODO: Handle errors for this class
+# Especially _build_data_frame() method -> Test with several examples
 class ReceiptItem:
     """
-    Receipt items to be parsed as df or as bytes
+    Receipt items to be parsed as data frame or as bytes
     """
 
     def __init__(self, soup: bytes):
@@ -383,26 +384,30 @@ class ReceiptItem:
         Returns:
             pd.DataFrame: parsed data frame from queried bytes receipt item
         """
-        df_result = self._parse_receipt_data()
-        return df_result
+
+        return self._parse_receipt_data()
 
     def _parse_receipt_data(self):
         """
         Parses bytes content into data frame from queried bytes receipt item
         """
+        try: 
+            data_text = self._soup.find('div', attrs={'class': 'article pre'}).text
+            data_text.split("\n")
+            
+            for k, txt in enumerate(data_text.split("\n")):
+                if 'CHF' in txt:
+                    self._index_to_ignore = set()
+                    df_result = self._receipt_data_parser_type_one(data_text)
+                    break
+                else:
+                    df_result = self._receipt_data_parser_type_two(data_text)
+                    break
+            return df_result
 
-        data_text = self._soup.find('div', attrs={'class': 'article pre'}).text
-        data_text.split("\n")
-        
-        for k, txt in enumerate(data_text.split("\n")):
-            if 'CHF' in txt:
-                self._index_to_ignore = set()
-                df_result = self._receipt_data_parser_type_one(data_text)
-                break
-            else:
-                df_result = self._receipt_data_parser_type_two(data_text)
-                break
-        return df_result
+        except Exception as err:
+            error_line = sys.exc_info()[-1].tb_lineno
+            logging.error("Unknown error: %s, line: %s", *(err, error_line))
 
     def _receipt_data_parser_type_one(self, data_text: str):
         """
@@ -450,6 +455,7 @@ class ReceiptItem:
                     temp = [x.strip() for x in txt.split("  ") if x!= ""]
                     new_text.append(temp)
 
+        # Meaning that there column <Gespart> is empty
         if len(temp) == 5:
             idx_pop = col_names.index('Gespart')
             col_names.pop(idx_pop)
@@ -465,7 +471,8 @@ class ReceiptItem:
         Used by _receipt_data_parser_type_one() method
         to build three different types of data frames
         """
-        
+
+        # Depending on the row type
         if df_type == 'SEVERAL': 
             temp_df = df_data[(df_data[3].isna()) & (df_data[0] != 'AKT')]
             index_quantity = temp_df.index
