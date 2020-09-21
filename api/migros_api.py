@@ -367,44 +367,49 @@ class ReceiptItem:
 
     def __init__(self, soup: bytes):
         super(ReceiptItem).__init__()
-        self.soup = bs(soup, 'lxml')
-        self.index_to_ignore = set()
+        self._soup = bs(soup, 'lxml')
+        self._index_to_ignore = set()
 
     def get_raw_data(self) -> bytes:
+        """ Get raw soup in bytes of the receipt item that was queried
+
+        Returns:
+            bytes: Beautifoulsoup object
         """
-        get soup
-        """
-        return self.soup
+        return self._soup
 
     def get_data_frame(self) -> pd.DataFrame:
         """
         Returns:
-            pd.DataFrame: [description]
+            pd.DataFrame: parsed data frame from queried bytes receipt item
         """
-        df_result = self.parse_receipt_data()
+        df_result = self._parse_receipt_data()
         return df_result
 
-    def parse_receipt_data(self):
+    def _parse_receipt_data(self):
         """
-        Only german -> todo french and italian
+        Parses bytes content into data frame from queried bytes receipt item
         """
 
-        data_text = self.soup.find('div', attrs={'class': 'article pre'}).text
+        data_text = self._soup.find('div', attrs={'class': 'article pre'}).text
         data_text.split("\n")
         
         for k, txt in enumerate(data_text.split("\n")):
             if 'CHF' in txt:
-                self.index_to_ignore = set()
-                df_result = self.receipt_data_parser_type_one(data_text)
+                self._index_to_ignore = set()
+                df_result = self._receipt_data_parser_type_one(data_text)
                 break
             else:
-                df_result = self.receipt_data_parser_type_two(data_text)
+                df_result = self._receipt_data_parser_type_two(data_text)
                 break
         return df_result
 
-    def receipt_data_parser_type_one(self, data_text: str):
+    def _receipt_data_parser_type_one(self, data_text: str):
         """
-        Two types of receipts
+        Helper function to _parse_receipt_data() method
+
+        Migros uses two types of receipts, depending on which type we are dealing with
+        we use one of these two methods to parse byte data into data frame
         """
         new_text = []
         
@@ -419,16 +424,19 @@ class ReceiptItem:
         
         frame = []
         for df_type in ['AKT', 'SEVERAL', '']:
-            df_bdf = self.build_data_frame(df_data=df_temp_data, df_type=df_type)
+            df_bdf = self._build_data_frame(df_data=df_temp_data, df_type=df_type)
             frame.append(df_bdf)
         df_final = pd.concat(frame, sort=False)
         df_final = df_final.reset_index().drop(columns='index')
         
         return df_final
 
-    def receipt_data_parser_type_two(self, data_text: str):
+    def _receipt_data_parser_type_two(self, data_text: str):
         """
-        Two types of receipts
+        Helper function to _parse_receipt_data() method
+        
+        Migros uses two types of receipts, depending on which type we are dealing with
+        we use one of these two methods to parse byte data into data frame
         """
         # There are two types of receipts -> limmatfeld
 
@@ -452,11 +460,10 @@ class ReceiptItem:
         
         return df_receipt
     
-    def build_data_frame(self, df_data: pd.DataFrame, df_type: str):
+    def _build_data_frame(self, df_data: pd.DataFrame, df_type: str):
         """
-        Used by receipt_data_parser_type_one() method
+        Used by _receipt_data_parser_type_one() method
         to build three different types of data frames
-
         """
         
         if df_type == 'SEVERAL': 
@@ -468,7 +475,7 @@ class ReceiptItem:
             index_quantity = temp_df.index
             
         else: 
-            index_to_ignore_list = list(self.index_to_ignore)
+            index_to_ignore_list = list(self._index_to_ignore)
             temp_df = df_data[(df_data[3].isna() == False) & (df_data.index.isin(index_to_ignore_list) == False)]
         
         if df_type in ['SEVERAL', 'AKT']:
@@ -477,11 +484,11 @@ class ReceiptItem:
             for idx in index_quantity:
                 new_index = idx + 1
                 
-                self.index_to_ignore.add(new_index)
+                self._index_to_ignore.add(new_index)
 
                 if df_type == 'AKT': 
                     akt_index = idx + 2
-                    self.index_to_ignore.add(akt_index)
+                    self._index_to_ignore.add(akt_index)
                     df_aktien = df_data[df_data.index == akt_index]
                     # Aktien part
                     akt_price = df_aktien[2].values[0]
