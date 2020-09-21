@@ -9,6 +9,7 @@ import sys
 from bs4 import BeautifulSoup as bs
 from datetime import datetime
 import numpy as np
+import pandas as pd
 
 
 FILE_PATH_CONF = "./"
@@ -24,11 +25,7 @@ logging.basicConfig(
     ]
 )
 
-
 # TODO: 
-# CORRECT ERROR ON GET_NEXT_KASSENBONS PAGES RISE BY 2
-# Provide get_kassenbons result in a list or dictionary format
-# Fetch specific kasenbon with id
 # Get it into pdf format? 
 # Add decorators for user required
 # Add exception class
@@ -297,6 +294,7 @@ class MigrosApi(object):
         except ExceptionMigrosApi as err:
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("%s, error line: %s", *(err.error_codes[err.msg], error_line))
+
         except Exception as err:
             error_line = sys.exc_info()[-1].tb_lineno
             logging.error("Error: %s, line: %s", *(err, error_line))
@@ -321,7 +319,7 @@ class MigrosApi(object):
 
         Args:
             receipt_id (str): id from receipt
-            export_type (str): type to export
+            export_type (str): type to export, accepted <html> and <pdf>
 
         Returns:
             [bytes]: returns requested file
@@ -358,7 +356,170 @@ class MigrosApi(object):
 
         response = self.session.get(request_url, headers=self.headers, params=params)
 
-        return response.content
+        return ReceiptItem(response.content)
+
+
+# TODO: Handle errors for this class
+class ReceiptItem:
+    """
+    Receipt items to be parsed as df or as bytes
+    """
+
+    def __init__(self, soup: bytes):
+        super(ReceiptItem).__init__()
+        self.soup = bs(soup, 'lxml')
+        self.index_to_ignore = set()
+
+    def get_raw_data(self) -> bytes:
+        """
+        get soup
+        """
+        return self.soup
+
+    def get_data_frame(self) -> pd.DataFrame:
+        """
+        Returns:
+            pd.DataFrame: [description]
+        """
+        df_result = self.parse_receipt_data()
+        return df_result
+
+    def parse_receipt_data(self):
+        """
+        Only german -> todo french and italian
+        """
+
+        data_text = self.soup.find('div', attrs={'class': 'article pre'}).text
+        data_text.split("\n")
+        
+        for k, txt in enumerate(data_text.split("\n")):
+            if 'CHF' in txt:
+                self.index_to_ignore = set()
+                df_result = self.receipt_data_parser_type_one(data_text)
+                break
+            else:
+                df_result = self.receipt_data_parser_type_two(data_text)
+                break
+        return df_result
+
+    def receipt_data_parser_type_one(self, data_text: str):
+        """
+        Two types of receipts
+        """
+        new_text = []
+        
+        for k, txt in enumerate(data_text.split("\n")):
+            if (txt != "") & ('CHF' not in txt):
+                temp_list = [x.strip() for x in txt.split("  ") if x!= ""]
+                if 'AKT' not in temp_list:
+                    temp_list.insert(0, ' ')
+                new_text.append(temp_list)
+                
+        df_temp_data = pd.DataFrame(new_text)
+        
+        frame = []
+        for df_type in ['AKT', 'SEVERAL', '']:
+            df_bdf = self.build_data_frame(df_data=df_temp_data, df_type=df_type)
+            frame.append(df_bdf)
+        df_final = pd.concat(frame, sort=False)
+        df_final = df_final.reset_index().drop(columns='index')
+        
+        return df_final
+
+    def receipt_data_parser_type_two(self, data_text: str):
+        """
+        Two types of receipts
+        """
+        # There are two types of receipts -> limmatfeld
+
+        new_text = []
+
+        for k, txt in enumerate(data_text.split("\n")):
+            if txt:
+                if k==0:
+                    col_names = [x.strip() for x in txt.split("  ") if x!= ""]
+                else:     
+                    temp = [x.strip() for x in txt.split("  ") if x!= ""]
+                    new_text.append(temp)
+
+        if len(temp) == 5:
+            idx_pop = col_names.index('Gespart')
+            col_names.pop(idx_pop)
+            
+        df_receipt = pd.DataFrame(new_text, columns=col_names)
+        df_receipt['Gespart'] = ['' for x in df_receipt.Menge]
+        df_receipt = df_receipt[['Artikelbezeichnung', 'Menge', 'Preis', 'Gespart', 'Total']]
+        
+        return df_receipt
+    
+    def build_data_frame(self, df_data: pd.DataFrame, df_type: str):
+        """
+        Used by receipt_data_parser_type_one() method
+        to build three different types of data frames
+
+        """
+        
+        if df_type == 'SEVERAL': 
+            temp_df = df_data[(df_data[3].isna()) & (df_data[0] != 'AKT')]
+            index_quantity = temp_df.index
+            
+        elif df_type == 'AKT':
+            temp_df = df_data[(df_data[3].isna()) & (df_data[0] == 'AKT')]
+            index_quantity = temp_df.index
+            
+        else: 
+            index_to_ignore_list = list(self.index_to_ignore)
+            temp_df = df_data[(df_data[3].isna() == False) & (df_data.index.isin(index_to_ignore_list) == False)]
+        
+        if df_type in ['SEVERAL', 'AKT']:
+            
+            new_data = []
+            for idx in index_quantity:
+                new_index = idx + 1
+                
+                self.index_to_ignore.add(new_index)
+
+                if df_type == 'AKT': 
+                    akt_index = idx + 2
+                    self.index_to_ignore.add(akt_index)
+                    df_aktien = df_data[df_data.index == akt_index]
+                    # Aktien part
+                    akt_price = df_aktien[2].values[0]
+                    akt_price = akt_price.replace("-", '')
+                    akt_price = float(akt_price) * -1
+                else:
+                    akt_price = 0
+                    
+                df_current = df_data[df_data.index == idx]
+                df_temp = df_data[df_data.index == new_index]
+                
+                menge, price = df_temp[1].values[0].split("x")
+                total = df_temp[2].values[0]
+                if "-" in total:
+                    total = total.replace("-", "")
+                    total = float(total) * -1
+                else:
+                    total = float(total)
+                menge = float(menge.strip())
+                price = float(price.strip())
+
+                concept = df_current[1].values[0]
+
+                new_data.append((concept, menge, price, akt_price, total))
+
+            columns = ['Artikelbezeichnung', 'Menge', 'Preis', 'Gespart', 'Total']
+            
+            df_final = pd.DataFrame(new_data, columns=columns)  
+            df_final["Total"] = df_final['Total'] + df_final['Gespart']
+        else:
+            df_final = temp_df.rename(columns={0: 'Gespart', 1: 'Artikelbezeichnung', 2: 'Preis', 3: 'Menge'}).reset_index()
+            df_final = df_final.drop(columns='index')
+            df_final['Gespart'] = [0 for x in df_final['Preis']]
+            df_final['Preis'] = [float(x) for x in df_final['Preis']]
+            df_final['Total'] = df_final['Preis']
+            
+        return df_final
+
 
 class ExceptionMigrosApi(Exception):
     """
