@@ -386,6 +386,14 @@ class ReceiptItem(object):
         """
 
         return self._parse_receipt_data()
+    
+    def to_pdf(self, path: str):
+        """[summary]
+
+        Args: 
+            path (str): path where to save pdf
+        """
+        pass
 
     def _parse_receipt_data(self):
         """
