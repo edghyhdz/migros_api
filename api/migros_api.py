@@ -313,13 +313,12 @@ class MigrosApi(object):
             # 
             logging.info("No more pages to query")
 
-    def get_kassenbon(self, receipt_id: str, request_pdf: False):
+    def get_kassenbon(self, receipt_id: str):
         """
         Fetches specified receipt from id
 
         Args:
             receipt_id (str): id from receipt
-            request_pdf (boolean): Whether to request pdf as bytes or not
 
         Returns:
             [bytes]: returns requested file(s)
@@ -358,6 +357,8 @@ class MigrosApi(object):
 
         response = self.session.get(request_url, headers=self.headers, params=params)
         response_pdf = self.session.get(request_pdf, headers=self.headers, params=params)
+
+        receipt_id = receipt_id.split("?")[0]
 
         return ReceiptItem(receipt_id=receipt_id, soup=response.content, pdf=response_pdf.content)
 
