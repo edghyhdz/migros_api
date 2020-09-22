@@ -313,16 +313,16 @@ class MigrosApi(object):
             # 
             logging.info("No more pages to query")
 
-    def get_kassenbon(self, receipt_id: str, export_type: str):
+    def get_kassenbon(self, receipt_id: str, request_pdf: False):
         """
         Fetches specified receipt from id
 
         Args:
             receipt_id (str): id from receipt
-            export_type (str): type to export, accepted <html> and <pdf>
+            request_pdf (boolean): Whether to request pdf as bytes or not
 
         Returns:
-            [bytes]: returns requested file
+            [bytes]: returns requested file(s)
         """
 
         # Build up cookies -> otherwise it will not work
@@ -351,12 +351,15 @@ class MigrosApi(object):
         }
 
         # Build url to search on that given period
-        request_url = self.url_export_data + "%s?receiptId=%s" % (export_type, receipt_id)
+        request_url = self.url_export_data + "%s?receiptId=%s" % ('html', receipt_id)
         logging.info("Export url: %s", request_url)
 
-        response = self.session.get(request_url, headers=self.headers, params=params)
+        request_pdf = self.url_export_data + "%s?receiptId=%s" % ('pdf', receipt_id)
 
-        return ReceiptItem(response.content)
+        response = self.session.get(request_url, headers=self.headers, params=params)
+        response_pdf = self.session.get(request_pdf, headers=self.headers, params=params)
+
+        return ReceiptItem(receipt_id=receipt_id, soup=response.content, pdf=response_pdf.content)
 
 
 # TODO: Handle errors for this class
@@ -366,9 +369,11 @@ class ReceiptItem(object):
     """
     Receipt items to be parsed as data frame or as bytes
     """
-    def __init__(self, soup: bytes):
+    def __init__(self, receipt_id: str, soup: bytes, pdf=None):
         super(ReceiptItem).__init__()
+        self._receipt_id = receipt_id
         self._soup = bs(soup, 'lxml')
+        self._pdf = pdf
         self._index_to_ignore = set()
 
     def get_raw_data(self) -> bytes:
@@ -388,12 +393,28 @@ class ReceiptItem(object):
         return self._parse_receipt_data()
     
     def to_pdf(self, path: str):
-        """[summary]
+        """
+        Uses response that parses bytes to generate pdf
 
         Args: 
             path (str): path where to save pdf
         """
-        pass
+        try: 
+            if self._pdf:
+                file_name = self._receipt_id + ".pdf"
+                full_path = os.path.join(path, file_name)
+                with open(full_path, 'wb') as file:
+                    file.write(self._pdf)
+                logging.info("Saved file: %s", file_name)
+            else:
+                raise ExceptionMigrosApi(6)
+
+        except ExceptionMigrosApi as err:
+            logging.error("%s, error line: %s", err.error_codes[err.msg])
+
+        except Exception as err:
+            line_no = sys.exc_info()[-1].tb_lineno
+            logging.error("Error: %s, line: %s", *(err, line_no))
 
     def _parse_receipt_data(self):
         """
@@ -550,7 +571,9 @@ class ExceptionMigrosApi(Exception):
         '1': "Could not authenticate",
         '2': "Could not find username when authenticating", 
         '3': "Could not authenticate to cumulus",
-        '4': "period_from and period_to should be datetime objects"
+        '4': "period_from and period_to should be datetime objects",
+
+        '6': "Request again the item and indicate request_pdf=True"
     }
 
     def __init__(self, code):
