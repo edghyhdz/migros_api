@@ -8,20 +8,15 @@
 <h4 align="left">An unofficial Migros API (more like Cumulus API) to fetch cumulus and receipt data, as well as receipt PDFs!</h4>
 
 ## Description
-This script uses python requests authenticate with the official Migros website. Once authenticated via password and username, you can further authenticate with your cumulus account.
+This script uses python requests to authenticate to the official Migros website. Once authenticated via password and username, you can further authenticate with your cumulus account.
 
 You can see a brief showcase of how it can be used either on the video below, or in the description that follows. 
 
 ![screenshot](https://github.com/edghyhdz/migros_api/blob/master/usage.gif)
 
 ## Usage
-* `git clone` this repository
-* Once inside the root directory where you cloned this repo,
-Size Limit has a [GitHub action] that comments and rejects pull requests based
-on Size Limit output.
-
-1. Install and configure Size Limit as shown above.
-2. Add the following action inside
+1. `git clone` this repository
+2. Once inside the root directory where you cloned this repo,
 
 ```python
 from api.migros_api import MigrosApi
@@ -35,7 +30,7 @@ migros_api = MigrosApi(pwd, email)
 
 ```
 
-3. Once authenticated, it will let you know whether it was succesful or not
+3. Once authenticated, it will let you know whether it was successful or not
   - If it was successful, then you can proceed to authenticate to your cumulus account like so
  ```python
 migros_api.login_cumulus()
