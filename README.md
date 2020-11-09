@@ -23,7 +23,7 @@ from api.migros_api import MigrosApi
 from datetime import datetime, timedelta
 from getpass import getpass
 
-pwd = getpass("yourpasswor": )
+pwd = getpass("yourpassword": )
 email = "youremail@email.com"  # Username of your migros account
 
 migros_api = MigrosApi(pwd, email)
