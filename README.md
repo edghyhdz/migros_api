@@ -5,7 +5,7 @@
   <br>
 </h1>
 
-<h4 align="left">An unofficial Migros API to fetch cumulus and receipt data, as well as receipt PDFs!</h4>
+<h4 align="left">An unofficial Migros API (more like Cumulus API) to fetch cumulus and receipt data, as well as receipt PDFs!</h4>
 
 ## Description
 This script uses python requests authenticate with the official Migros website. Once authenticated via password and username, you can further authenticate with your cumulus account.
@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 from getpass import getpass
 
 pwd = getpass("yourpasswor": )
-email = "youremail@email.com"  # Username for your migros account
+email = "youremail@email.com"  # Username of your migros account
 
 migros_api = MigrosApi(pwd, email)
 
