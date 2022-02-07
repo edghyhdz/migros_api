@@ -16,6 +16,7 @@ class ExceptionMigrosApi(Exception):
             '2': "Could not find username when authenticating", 
             '3': "Could not authenticate to cumulus",
             '4': "period_from and period_to should be datetime objects",
+            '5': "period_from should be <= to period_to",
             '6': "Request again the item and indicate request_pdf=True"
         }
         self.code = code
