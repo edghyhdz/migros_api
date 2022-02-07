@@ -1,6 +1,4 @@
 <h1 align="left">
-  <br>
-  <a><img src="https://abs.twimg.com/emoji/v2/svg/1f603.svg" alt="Markdownify" width="200"></a>
   <br>Unofficial Migros API
   <br>
 </h1>
