@@ -33,8 +33,6 @@ class MigrosApi:
     """ Migros api class declaration and definition """
 
     def __init__(self, password, username):
-
-
         self.__password = password
         self.__username = username
         self.__user_real_name = ""
@@ -102,7 +100,7 @@ class MigrosApi:
             logging.debug("Found CSR token: %s", display_token)
 
             # Build up authentication payload
-            raw_data = "_csrf={0}&username={1}&password={2}".format(csrf, self.__username, self.__password)
+            raw_data = "_csrf={0}&username={1}&password={2}".format(csrf, self.user_email, self.__password)
             
             # Authenticate
             response = self.session.post(self.login_url, headers=self.headers, data=raw_data)
