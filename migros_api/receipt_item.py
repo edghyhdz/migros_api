@@ -7,12 +7,11 @@ import sys
 from .exceptions_migros import ExceptionMigrosApi
 
 
-class ReceiptItem(object):
+class ReceiptItem:
     """
     Receipt items to be parsed as data frame or as bytes
     """
     def __init__(self, receipt_id: str, soup: bytes, pdf=None):
-        super(ReceiptItem).__init__()
         self._receipt_id = receipt_id
         self._soup = bs(soup, 'lxml')
         self._pdf = pdf
@@ -27,14 +26,15 @@ class ReceiptItem(object):
         return self._soup
 
     def get_data_frame(self) -> pd.DataFrame:
-        """
+        """ Parses all purchase data into a pandas data frame
+
         Returns:
-            pd.DataFrame: parsed data frame from queried bytes receipt item
+            pd.DataFrame: All `receipt_id` purchase data as a data frame
         """
 
         return self._parse_receipt_data()
     
-    def to_pdf(self, path: str):
+    def to_pdf(self, path: str) -> None:
         """
         Uses response that parses bytes to generate pdf
 
@@ -51,13 +51,9 @@ class ReceiptItem(object):
             else:
                 raise ExceptionMigrosApi(6)
 
-        # except ExceptionMigrosApi as err:
-        #     logging.error("%s, error line: %s", err.error_codes[err.msg])
-
         except Exception as err:
             line_no = sys.exc_info()[-1].tb_lineno
-            raise Exception("Unhandled exception, line: %s" % line_no)
-            # logging.error("Error: %s, line: %s", *(err, line_no))
+            raise Exception("Unhandled exception, error: %s, line: %s" % (err, line_no))
 
     def _parse_receipt_data(self):
         """
@@ -75,6 +71,7 @@ class ReceiptItem(object):
                 else:
                     df_result = self._receipt_data_parser_type_two(data_text)
                     break
+
             return df_result
 
         except Exception as err:
@@ -83,7 +80,7 @@ class ReceiptItem(object):
 
     def _receipt_data_parser_type_one(self, data_text: str):
         """
-        Helper function to _parse_receipt_data() method
+        Helper function to `_parse_receipt_data()` method
 
         Migros uses two types of receipts, depending on which type we are dealing with
         we use one of these two methods to parse byte data into data frame
@@ -139,7 +136,7 @@ class ReceiptItem(object):
     
     def _build_data_frame(self, df_data: pd.DataFrame, df_type: str):
         """
-        Used by _receipt_data_parser_type_one() method
+        Used by `_receipt_data_parser_type_one()` method
         to build three different types of data frames
         """
 
