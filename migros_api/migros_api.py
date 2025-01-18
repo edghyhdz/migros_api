@@ -1,56 +1,87 @@
-"""migros_api class"""
-
 import requests
 import json
 import re
 import logging
 import os
 import sys
+import time
+import platform
 from typing import Dict
 from bs4 import BeautifulSoup as bs
-from datetime import datetime
+from datetime import datetime,timedelta
 import numpy as np
 import pandas as pd
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from .exceptions_migros import ExceptionMigrosApi
 from .receipt_item import ReceiptItem
 
-
+# Configure logging
 FILE_PATH_CONF = "./"
 FILE_NAME_CONF = "log_files.log"
 
 logging.basicConfig(
     format='%(levelname)s: %(asctime)s - %(message)s [%(filename)s:%(lineno)s - %(funcName)s()]',
     datefmt='%d-%b-%y %H:%M:%S',
-    level=logging.INFO,
+    level=logging.DEBUG,
     handlers=[
         logging.FileHandler(os.path.join(FILE_PATH_CONF, FILE_NAME_CONF)),
         logging.StreamHandler()
     ]
 )
 
+class MigrosApi:
+    """Migros API class for interacting with Migros/Cumulus services"""
 
-class MigrosApi: 
-    """ Migros api class declaration and definition """
-
-    def __init__(self, password, username):
+    def __init__(self, password: str, username: str):
+        """Initialize MigrosApi with credentials"""
         self.__password = password
         self.__username = username
         self.__user_real_name = ""
-
-        self.session = requests.session()
-        self.headers = {}
-
-        self.csfr_pattern = r'(?<="_csrf" content=)(.*)(?=\/>)'
+        
+        # Initialize session with retry strategy
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        
+        # Set up browser-like headers
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Sec-Ch-Ua": "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"",
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": "\"Windows\"",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1"
+        }
+        
+        # URLs
+        self.csrf_pattern = r'(?<="_csrf" content=")([^"]+)'
         self.login_url = "https://login.migros.ch/login"
         self.cumulus_login = "https://www.migros.ch/de/cumulus/konto~checkImmediate=true~.html"
         self.url_receipts = "https://www.migros.ch/de/cumulus/konto/kassenbons.html?sort=dateDsc&dateFrom={0}&dateTo={1}"
         self.url_export_data = "https://www.migros.ch/service/avantaReceiptExport/"
-
-        # Log into cumulus
-        self._login_cumulus()
         
-    # ---------------------------------------------------------------------------------------------
-    # Typical behavioral methods ------------------------------------------------------------------
+        # Initialize session and login
+        try:
+            self._init_session()
+            self._login_cumulus()
+        except Exception as e:
+            logging.error(f"Initialization failed: {str(e)}")
+            raise
+
     @property
     def user_name(self) -> str:
         return self.__user_real_name
@@ -62,221 +93,220 @@ class MigrosApi:
     @property
     def user_email(self) -> str:
         return self.__username
-    
-    # ---------------------------------------------------------------------------------------------
-    # Private methods -----------------------------------------------------------------------------
+
+    def _format_date(self, date: datetime) -> str:
+        """Format date in a platform-independent way"""
+        day = str(date.day).zfill(2)
+        month = str(date.month).zfill(2)
+        return f"{date.year}-{month}-{day}"
+
+    def _init_session(self):
+        """Initialize session with main page visit"""
+        try:
+            main_page = "https://www.migros.ch/"
+            logging.info("Initializing session with main page visit...")
+            response = self.session.get(main_page, headers=self.headers)
+            response.raise_for_status()
+            time.sleep(1)
+        except Exception as e:
+            logging.error(f"Failed to initialize session: {str(e)}")
+            raise
 
     def __authenticate(self):
-        """ Initial authentication to migros.ch/login using 
-            username and password
+        """Authenticate to the Migros website."""
+        try:
+            # Update headers for login page
+            login_headers = self.headers.copy()
+            login_headers.update({
+                "Sec-Fetch-Site": "same-origin",
+                "Referer": "https://www.migros.ch/"
+            })
+            
+            logging.info("Fetching login page...")
+            response = self.session.get(self.login_url, headers=login_headers, timeout=10)
+            response.raise_for_status()
+            time.sleep(1)
 
-        Raises:
-            ExceptionMigrosApi: In case username was not found on migros site, meaning 
-                that authentication has failed
-            Exception: If credentials do not match any user on migros side
-        """
+            # Extract CSRF token
+            csrf_match = re.search(self.csrf_pattern, response.text)
+            if not csrf_match:
+                logging.error("CSRF token not found")
+                raise ExceptionMigrosApi(1, "CSRF token not found")
+            csrf_token = csrf_match.group(1)
+            logging.info(f"CSRF token retrieved: {csrf_token[:5]}...")
 
-        try: 
-            self.headers = {
-                'accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-                "accept-language": "en-US,en;q=0.9",
+            # Update headers for POST request
+            post_headers = login_headers.copy()
+            post_headers.update({
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": "https://login.migros.ch",
+                "Referer": self.login_url
+            })
+
+            # Prepare login payload
+            payload = {
+                "_csrf": csrf_token,
+                "username": self.__username,
+                "password": self.__password,
+                "remember-me": "true"
+            }
+
+            time.sleep(2)
+
+            # Submit login request
+            logging.info("Submitting login request...")
+            response = self.session.post(
+                self.login_url, 
+                headers=post_headers, 
+                data=payload,
+                allow_redirects=True,
+                timeout=10
+            )
+            response.raise_for_status()
+
+            # Check response
+            soup = bs(response.text, "html.parser")
+            error_messages = soup.find_all(class_=["error", "error-message", "alert-danger"])
+            
+            if error_messages:
+                error_text = " | ".join([msg.get_text(strip=True) for msg in error_messages])
+                raise ExceptionMigrosApi(1, f"Login failed: {error_text}")
+
+            if "authentication_error" in response.url.lower():
+                raise ExceptionMigrosApi(1, "Authentication failed")
+
+            logging.info("Login successful.")
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Request failed during authentication: {str(e)}")
+            raise ExceptionMigrosApi(1, f"Network error during authentication: {str(e)}")
+        except ExceptionMigrosApi:
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error during authentication: {str(e)}")
+            raise ExceptionMigrosApi(1, f"Authentication failed: {str(e)}")
+
+    def _login_cumulus(self):
+        """Log in to the Cumulus account."""
+        try:
+            self.__authenticate()
+            
+            # Update cookies and headers for Cumulus
+            self.headers['cookie'] = '; '.join([f"{x.name}={x.value}" for x in self.session.cookies])
+            self.headers.update({
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                "accept-language": "en-US,en;q=0.9,de;q=0.8",
                 "sec-fetch-dest": "document",
                 "sec-fetch-mode": "navigate",
                 "sec-fetch-site": "same-origin",
-                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36'
-            }
+                "upgrade-insecure-requests": "1",
+                "referer": "https://www.migros.ch/de"
+            })
 
-            logging.debug("Getting CSRF token")
-            response = self.session.get(self.login_url, headers=self.headers)
-
-            # Build up cookies
-            self.headers['cookie'] = '; '.join([x.name + '=' + x.value for x in response.cookies])
-            self.headers['content-type'] = 'application/x-www-form-urlencoded'
-
-            # Search first for the CSRF token upon first get request
-            csrf = re.search(self.csfr_pattern, response.text).group(0)
-            csrf = eval(csrf)
-            display_token = csrf[0:5] + "...."
-            logging.debug("Found CSR token: %s", display_token)
-
-            # Build up authentication payload
-            raw_data = "_csrf={0}&username={1}&password={2}".format(csrf, self.user_email, self.__password)
-            
-            # Authenticate
-            response = self.session.post(self.login_url, headers=self.headers, data=raw_data)
-            response.raise_for_status()
-            status_code = response.status_code
-
-            logging.debug("Response: %s", status_code)
-
-            soup = bs(response.content, 'lxml')
-
-            # Check if we have logged in successfully
-            soup_item = soup.find("div", attrs={"class": "m-accountmenu"})
-
-            if not soup_item:
-                raise ExceptionMigrosApi(1)
-
-            # If the following attribute is true, then we are pretty much in
-            if soup_item.get('data-logged-in') != 'true':
-                raise ExceptionMigrosApi(1)
-
-            email_address = soup_item.find(
-                "span", attrs={"class": "m-accountmenuflyout__info-mail"}
-            ).text
-
-            # If email address not found
-            if email_address != self.user_email:
-                raise ExceptionMigrosApi(2)
-            
-            # Get user name
-            self.user_name = soup_item.find(
-                "span", attrs={"class": "m-accountmenuflyout__info-title"}
-            ).text
-        
-        except Exception as err:
-            error_line = sys.exc_info()[-1].tb_lineno
-            raise Exception("Unhandled exception, line: %s" % error_line)
-
-    def _login_cumulus(self):
-        """ After initially login into migros, Cumulus requires an extra get request to land 
-            into the cumulus site
-
-        Raises:
-            ExceptionMigrosApi: In case username was not found on cumulus site, meaning 
-                that authentication has failed
-            Exception: Unhandled exceptions
-        """
-
-        try: 
-            self.__authenticate()
-
-            # Update cookies
-            self.headers['cookie'] = '; '.join([x.name + '=' + x.value for x in self.session.cookies])
-
-            # Update headers
-            self.headers.update(
-                {
-                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-                    "accept-language": "en-US,en;q=0.9",
-                    "sec-fetch-dest": "document",
-                    "sec-fetch-mode": "navigate",
-                    "sec-fetch-site": "same-origin",
-                    "upgrade-insecure-requests": "1",
-                }
+            logging.info("Logging into Cumulus account...")
+            response = self.session.get(
+                self.cumulus_login,
+                headers=self.headers,
+                params={
+                    "referrer": "https://www.migros.ch/resources/loginPage~lang=de~.html",
+                    "referrerPolicy": "no-referrer-when-downgrade"
+                },
+                allow_redirects=True
             )
-
-            params = {
-                "referrer": "https://www.migros.ch/resources/loginPage~lang=de~.html",
-                "referrerPolicy": "no-referrer-when-downgrade",
-            }
-
-            logging.debug("Login into cumulus account")
-            response = self.session.get(self.cumulus_login, headers=self.headers, params=params)
-            status_code = response.status_code
-            logging.debug("Status code: %s", status_code)
+            response.raise_for_status()
+            
+            # Verify Cumulus access
+            soup = bs(response.text, "html.parser")
+            cumulus_elements = soup.find_all(string=lambda text: "Cumulus" in str(text))
+            
+            if not cumulus_elements:
+                raise ExceptionMigrosApi(3, "Failed to access Cumulus account")
                 
-        except Exception as err:
-            error_line = sys.exc_info()[-1].tb_lineno
-            raise Exception("Unhandled exception, line: %s" % error_line)
-    
-    # ---------------------------------------------------------------------------------------------
-    # Public methods ------------------------------------------------------------------------------
+            logging.info("Successfully accessed Cumulus account")
+            
+        except ExceptionMigrosApi:
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error during Cumulus login: {str(e)}")
+            raise ExceptionMigrosApi(3, f"Cumulus login failed: {str(e)}")
 
     def get_all_receipts(self, period_from: datetime, period_to: datetime, **kwargs) -> Dict[str, dict]:
-        """ Retrieves dictionary with receipt (kassenbons) ids as key and receipt information as values.
-            Receipt information includes the following, 
-                `receipt_id`, `store_name`, `cost`, and `cumulus_points`
-            
+        """Retrieves dictionary with receipt (kassenbons) ids as key and receipt information as values.
+        Receipt information includes: receipt_id, store_name, cost, and cumulus_points
+        
         Args:
             period_from (datetime): period from, to execute search
             period_to (datetime): period to, to execute search
 
-        Raises:
-            ExceptionMigrosApi: if `period_from` or `period_to` are not datetime objects
-            ExceptionMigrosApi: if `period_from` > `period_to`
-            Exception: for any other unhandled exceptions
-
         Returns:
             Dict[str, dict]: Period receipts information
         """
-
         current_page = 1
-
-        # Used for troubleshooting, store response inside a list
         response_list = []
         if "response" in kwargs:
             response_list = kwargs.get("response")
-        try:
-            # Check that all dates provided are correctly formatted
-            for date in (period_from, period_to): 
-                if not isinstance(period_from, datetime): 
-                    raise ExceptionMigrosApi(4)
 
+        try:
+            # Validate dates
+            for date in (period_from, period_to):
+                if not isinstance(date, datetime):
+                    raise ExceptionMigrosApi(4)
             if period_from > period_to:
                 raise ExceptionMigrosApi(5)
 
-            # Format according to payload needs
-            period_from = datetime.strftime(period_from, "%Y-%m-%-d")
-            period_to = datetime.strftime(period_to, "%Y-%m-%-d")
+            # Format dates using platform-independent method
+            period_from_str = self._format_date(period_from)
+            period_to_str = self._format_date(period_to)
 
-            # Build up cookies -> otherwise it will not work
-            self.headers['cookie'] = '; '.join(
-                [
-                    x[0] + '=' + x[1] for x in self.session.cookies.get_dict().items()
-                ]
-            )
+            # Update headers
+            self.headers['cookie'] = '; '.join([
+                f"{k}={v}" for k, v in self.session.cookies.get_dict().items()
+            ])
+            self.headers.update({
+                "accept": "text/html, */*; q=0.01",
+                "accept-language": "de",
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "x-requested-with": "XMLHttpRequest"
+            })
 
-            self.headers.update(
-                {
-                    "accept": "text/html, */*; q=0.01",
-                    "accept-language": "de",
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-origin",
-                    "x-requested-with": "XMLHttpRequest",
-                }
-            )
-
+            # Request parameters
             params = {
                 "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
-                "referrerPolicy": "no-referrer-when-downgrade",
+                "referrerPolicy": "no-referrer-when-downgrade"
             }
 
-            # Request url to get receipts
-            request_url = self.url_receipts.format(period_from, period_to)
-
-            # While we have pages available on cumulus side keep on getting the data
+            # Build request URL and get receipts
+            request_url = self.url_receipts.format(period_from_str, period_to_str)
             final_dict = {}
 
-            url = request_url + "&p=%s" % current_page
-            response = self.session.get(url, headers=self.headers, params=params)
-
-            # For troubleshooting purposes
-            response_list.append(response)
-
-            # First response will give us info on how many pages to expect
-            total_pages: int = self._parse_receipt_data(response, final_dict)
-
-            # Keep on getting item data until we ran out of pages
-            while current_page != total_pages:
-                current_page += 1
-                url = request_url + "&p=%s" % current_page
+            while True:
+                url = f"{request_url}&p={current_page}"
                 response = self.session.get(url, headers=self.headers, params=params)
                 response_list.append(response)
 
-                total_pages: int = self._parse_receipt_data(response, final_dict)
-            
+                total_pages = self._parse_receipt_data(response, final_dict)
+                
+                if current_page >= total_pages:
+                    break
+                    
+                current_page += 1
+                time.sleep(1)  # Add delay between pages
+
             return final_dict
 
+        except ExceptionMigrosApi as e:
+            logging.error(f"API error in get_all_receipts: {str(e)}")
+            raise
         except Exception as err:
             error_line = sys.exc_info()[-1].tb_lineno
-            raise Exception("Unhandled exception error: %s, line: %s" % (err, error_line))
+            logging.error(f"Unhandled error in get_all_receipts: {str(err)}, line: {error_line}")
+            raise Exception(f"Failed to get receipts: {str(err)}")
 
     def get_receipt(self, receipt_id: str) -> ReceiptItem:
-        """ Retrieves receipt from given `receipt_id` and returns it into
-            a `ReceiptItem` object. Object contains items bought 
-            information, with quantities and prices
+        """Retrieves receipt from given receipt_id and returns it as a ReceiptItem object.
+        Contains items bought information, with quantities and prices.
 
         Args:
             receipt_id (str): receipt id to get data
@@ -284,113 +314,119 @@ class MigrosApi:
         Returns:
             ReceiptItem: Object containing receipt bought items information
         """
+        try:
+            # Build up cookies and headers
+            self.headers['cookie'] = '; '.join([
+                f"{k}={v}" for k, v in self.session.cookies.get_dict().items()
+            ])
+            self.headers.update({
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+                "sec-fetch-dest": "iframe",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "same-origin",
+                "sec-fetch-user": "?1",
+                "upgrade-insecure-requests": "1",
+                "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html"
+            })
 
-        # Build up cookies -> otherwise it will not work
-        self.headers['cookie'] = '; '.join(
-            [
-                x[0] + '=' + x[1] for x in self.session.cookies.get_dict().items()
-            ]
-        )
-        self.headers.update(
-            {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-            "sec-fetch-dest": "iframe",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-site": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
-            "sec-fetch-user": "?1",
-            "upgrade-insecure-requests": "1",
-            "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
-            "referrerPolicy": "no-referrer-when-downgrade",
+            params = {
+                "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
+                "referrerPolicy": "no-referrer-when-downgrade"
             }
-        )
 
-        # Check if parameters are indeed needed
-        params = {
-            "referrer": "https://www.migros.ch/de/cumulus/konto/kassenbons.html",
-            "referrerPolicy": "no-referrer-when-downgrade"
-        }
+            # Build URLs
+            request_url = f"{self.url_export_data}html?receiptId={receipt_id}"
+            request_pdf = f"{self.url_export_data}pdf?receiptId={receipt_id}"
+            
+            logging.debug("Fetching receipt from: %s", request_url)
 
-        # Build url to search on that given period
-        request_url = self.url_export_data + "%s?receiptId=%s" % ('html', receipt_id)
-        logging.debug("Export url: %s", request_url)
+            # Get both HTML and PDF versions
+            response = self.session.get(request_url, headers=self.headers, params=params)
+            response_pdf = self.session.get(request_pdf, headers=self.headers, params=params)
 
-        request_pdf = self.url_export_data + "%s?receiptId=%s" % ('pdf', receipt_id)
+            response.raise_for_status()
+            response_pdf.raise_for_status()
 
-        response = self.session.get(request_url, headers=self.headers, params=params)
-        response_pdf = self.session.get(request_pdf, headers=self.headers, params=params)
+            # Clean receipt ID
+            receipt_id = receipt_id.split("?")[0]
 
-        receipt_id = receipt_id.split("?")[0]
+            return ReceiptItem(
+                receipt_id=receipt_id,
+                soup=response.content,
+                pdf=response_pdf.content
+            )
 
-        return ReceiptItem(receipt_id=receipt_id, soup=response.content, pdf=response_pdf.content)
-    
-    # ---------------------------------------------------------------------------------------------
-    # Helper functions ----------------------------------------------------------------------------
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error getting receipt {receipt_id}: {str(e)}")
+            raise ExceptionMigrosApi(f"Failed to retrieve receipt {receipt_id}")
+        except Exception as err:
+            error_line = sys.exc_info()[-1].tb_lineno
+            logging.error(f"Error getting receipt {receipt_id}: {str(err)}, line: {error_line}")
+            raise ExceptionMigrosApi(f"Failed to process receipt {receipt_id}: {str(err)}")
 
     def _parse_receipt_data(self, response: bytes, result_dict: dict) -> int:
-        """ Parses response data to a dictionary. Used as a helper function to 
-            the get_all_receipts() method
+        """Parses response data to a dictionary. Helper function for get_all_receipts method.
 
         Args:
             response (bytes): requests response
             result_dict (dict): dictionary to update items into
 
-        Raises:
-            Exception: For unhandled exceptions
-
         Returns:
             int: total number of pages of items from requested time period
         """
         try: 
-            # Get total number of pages
+            # Parse response content
             soup = bs(response.content, 'lxml')
 
+            # Get pagination information
             pages = []
             for item in soup.find_all('a', attrs={"aria-label": "Seite"}):
                 page_value = item.get('data-value')
-                if page_value.isnumeric():
-                    page_value = int(page_value)
-                    pages.append(page_value)
+                if page_value and page_value.isnumeric():
+                    pages.append(int(page_value))
             
-            total_pages = 1
-            if pages:
-                # Gets total number of pages from query
-                total_pages = np.max(pages)
+            total_pages = max(pages) if pages else 1
 
+            # Parse receipt items
             for item in soup.find_all('input', attrs={'type': 'checkbox'}): 
-                # Don't take first checkbox item to select all tick boxes
-                if 'all' not in item.get('value'):
-                    download_id = item.get('value')
-                    pdf_ref = item.find_next('a', attrs={'class': 'ui-js-toggle-modal'})
-                    recepit_id = pdf_ref.get('href').split("receiptId=")[-1]
-                    store_name = pdf_ref.find_next('td')
-                    cost = store_name.find_next('td')
-                    points = cost.find_next('td')
+                # Skip the "select all" checkbox
+                if item.get('value') == 'all':
+                    continue
 
-                    # TODO: Better formatting of results
-                    result_dict[download_id] = {
-                        'pdf_ref': pdf_ref.get('href'),
-                        'receipt_id': recepit_id,
-                        'store_name': store_name.text,
-                        'cost': cost.text,
-                        'cumulus_points': points.text
-                    }
+                download_id = item.get('value')
+                
+                # Find related elements
+                pdf_ref = item.find_next('a', attrs={'class': 'ui-js-toggle-modal'})
+                if not pdf_ref:
+                    logging.warning(f"No PDF reference found for item {download_id}")
+                    continue
+
+                receipt_id = pdf_ref.get('href').split("receiptId=")[-1]
+                
+                # Get receipt details
+                store_name = pdf_ref.find_next('td')
+                cost = store_name.find_next('td') if store_name else None
+                points = cost.find_next('td') if cost else None
+
+                if not all([store_name, cost, points]):
+                    logging.warning(f"Missing data for receipt {receipt_id}")
+                    continue
+
+                # Store receipt information
+                result_dict[download_id] = {
+                    'pdf_ref': pdf_ref.get('href'),
+                    'receipt_id': receipt_id,
+                    'store_name': store_name.text.strip(),
+                    'cost': cost.text.strip(),
+                    'cumulus_points': points.text.strip()
+                }
 
             return total_pages
 
         except Exception as err:
             error_line = sys.exc_info()[-1].tb_lineno
-            raise Exception("Unhandled exception error: %s, line: %s" % (err, error_line))
+            logging.error(f"Error parsing receipt data: {str(err)}, line: {error_line}")
+            raise Exception(f"Failed to parse receipt data: {str(err)}")
+        
 
 
-if __name__ == "__main__":
-    from getpass import getpass
-
-    PWD = os.environ['PASSWORD_MIGROS']
-    USERNAME = os.environ['USERNAME_MIGROS']
-
-    if not PWD:
-        PWD = getpass("GIVE ME YOUR PSWORD: ")
-    if not USERNAME:
-        USERNAME = input("GIVE ME YOUR USERNAME: ")
-
-    MIGROS_API = MigrosApi(username=USERNAME, password=PWD)
